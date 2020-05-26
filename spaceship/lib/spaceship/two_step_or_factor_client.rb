@@ -3,7 +3,7 @@ require_relative 'tunes/tunes_client'
 
 module Spaceship
   class Client
-    def handle_two_step_or_factor(response)
+    def handle_two_step_or_factor(response, proxy)
       # extract `x-apple-id-session-id` and `scnt` from response, to be used by `update_request_headers`
       @x_apple_id_session_id = response["x-apple-id-session-id"]
       @scnt = response["scnt"]
@@ -15,15 +15,15 @@ module Spaceship
       end
 
       if r.body.kind_of?(Hash) && r.body["trustedDevices"].kind_of?(Array)
-        handle_two_step(r)
+        handle_two_step(r, proxy)
       elsif r.body.kind_of?(Hash) && r.body["trustedPhoneNumbers"].kind_of?(Array) && r.body["trustedPhoneNumbers"].first.kind_of?(Hash)
-        handle_two_factor(r)
+        handle_two_factor(r, 0, proxy)
       else
         raise "Although response from Apple indicated activated Two-step Verification or Two-factor Authentication, spaceship didn't know how to handle this response: #{r.body}"
       end
     end
 
-    def handle_two_step(response)
+    def handle_two_step(response, proxy)
       if response.body.fetch("securityCode", {})["tooManyCodesLock"].to_s.length > 0
         raise Tunes::Error.new, "Too many verification codes have been sent. Enter the last code you received, use one of your devices, or try again later."
       end
@@ -39,11 +39,11 @@ module Spaceship
       result = choose(*available)
 
       device_id = result.match(/.*\t.*\t\((.*)\)/)[1]
-      handle_two_step_for_device(device_id)
+      handle_two_step_for_device(device_id, proxy)
     end
 
     # this is extracted into its own method so it can be called multiple times (see end)
-    def handle_two_step_for_device(device_id)
+    def handle_two_step_for_device(device_id, proxy)
       # Request token to device
       r = request(:put) do |req|
         req.url("https://idmsa.apple.com/appleauth/auth/verify/device/#{device_id}/securitycode")
@@ -52,7 +52,7 @@ module Spaceship
 
       # we use `Spaceship::TunesClient.new.handle_itc_response`
       # since this might be from the Dev Portal, but for 2 step
-      Spaceship::TunesClient.new.handle_itc_response(r.body)
+      Spaceship::TunesClient.new(proxy: proxy).handle_itc_response(r.body)
 
       puts("Successfully requested notification")
       code = ask("Please enter the 4 digit code: ")
@@ -67,7 +67,7 @@ module Spaceship
       end
 
       begin
-        Spaceship::TunesClient.new.handle_itc_response(r.body) # this will fail if the code is invalid
+        Spaceship::TunesClient.new(proxy: proxy).handle_itc_response(r.body) # this will fail if the code is invalid
       rescue => ex
         # If the code was entered wrong
         # {
@@ -89,7 +89,7 @@ module Spaceship
         # }
         if ex.to_s.include?("verification code") # to have a nicer output
           puts("Error: Incorrect verification code")
-          return handle_two_step_for_device(device_id)
+          return handle_two_step_for_device(device_id, proxy)
         end
 
         raise ex
@@ -100,7 +100,7 @@ module Spaceship
       return true
     end
 
-    def handle_two_factor(response, depth = 0)
+    def handle_two_factor(response, depth = 0, proxy)
       if depth == 0
         puts("Two-factor Authentication (6 digits code) is enabled for account '#{self.user}'")
         puts("More information about Two-factor Authentication: https://support.apple.com/en-us/HT204915")
@@ -138,17 +138,17 @@ module Spaceship
         # code was automatically sent
         should_request_code = !sms_automatically_sent(response)
         code_type = 'phone'
-        body = request_two_factor_code_from_phone(phone_id, phone_number, code_length, should_request_code)
+        body = request_two_factor_code_from_phone(phone_id, phone_number, code_length, should_request_code, proxy)
       elsif sms_automatically_sent(response) # sms fallback, code was automatically sent
         fallback_number = response.body["trustedPhoneNumbers"].first
         phone_number = fallback_number["numberWithDialCode"]
         phone_id = fallback_number["id"]
 
         code_type = 'phone'
-        body = request_two_factor_code_from_phone(phone_id, phone_number, code_length, false)
+        body = request_two_factor_code_from_phone(phone_id, phone_number, code_length, false, proxy)
       elsif sms_fallback(response) # sms fallback but code wasn't sent bec > 1 phone number
         code_type = 'phone'
-        body = request_two_factor_code_from_phone_choose(response.body["trustedPhoneNumbers"], code_length)
+        body = request_two_factor_code_from_phone_choose(response.body["trustedPhoneNumbers"], code_length, proxy)
       else
         puts("(Input `sms` to escape this prompt and select a trusted phone number to send the code as a text message)")
         puts("")
@@ -163,7 +163,7 @@ module Spaceship
         # User exited by entering `sms` and wants to choose phone number for SMS
         if code == 'sms'
           code_type = 'phone'
-          body = request_two_factor_code_from_phone_choose(response.body["trustedPhoneNumbers"], code_length)
+          body = request_two_factor_code_from_phone_choose(response.body["trustedPhoneNumbers"], code_length, proxy)
         end
       end
 
@@ -180,7 +180,7 @@ module Spaceship
       begin
         # we use `Spaceship::TunesClient.new.handle_itc_response`
         # since this might be from the Dev Portal, but for 2 factor
-        Spaceship::TunesClient.new.handle_itc_response(r.body) # this will fail if the code is invalid
+        Spaceship::TunesClient.new(proxy: proxy).handle_itc_response(r.body) # this will fail if the code is invalid
       rescue => ex
         # If the code was entered wrong
         # {
@@ -195,7 +195,7 @@ module Spaceship
         if ex.to_s.include?("verification code") # to have a nicer output
           puts("Error: Incorrect verification code")
           depth += 1
-          return handle_two_factor(response, depth)
+          return handle_two_factor(response, depth, proxy)
         end
 
         raise ex
@@ -275,7 +275,7 @@ If it is, please open an issue at https://github.com/fastlane/fastlane/issues/ne
       end
     end
 
-    def request_two_factor_code_from_phone_choose(phone_numbers, code_length)
+    def request_two_factor_code_from_phone_choose(phone_numbers, code_length, proxy)
       puts("Please select a trusted phone number to send code to:")
 
       available = phone_numbers.collect do |current|
@@ -284,11 +284,11 @@ If it is, please open an issue at https://github.com/fastlane/fastlane/issues/ne
       chosen = choose_phone_number(available)
       phone_id = phone_id_from_masked_number(phone_numbers, chosen)
 
-      request_two_factor_code_from_phone(phone_id, chosen, code_length)
+      request_two_factor_code_from_phone(phone_id, chosen, code_length, true, proxy)
     end
 
     # this is used in two places: after choosing a phone number and when a phone number is set via ENV var
-    def request_two_factor_code_from_phone(phone_id, phone_number, code_length, should_request_code = true)
+    def request_two_factor_code_from_phone(phone_id, phone_number, code_length, should_request_code = true, proxy)
       if should_request_code
         # Request code
         r = request(:put) do |req|
@@ -300,7 +300,7 @@ If it is, please open an issue at https://github.com/fastlane/fastlane/issues/ne
 
         # we use `Spaceship::TunesClient.new.handle_itc_response`
         # since this might be from the Dev Portal, but for 2 step
-        Spaceship::TunesClient.new.handle_itc_response(r.body)
+        Spaceship::TunesClient.new(proxy: proxy).handle_itc_response(r.body)
 
         puts("Successfully requested text message to #{phone_number}")
       end

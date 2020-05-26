@@ -193,7 +193,7 @@ module Spaceship
       self.new(cookie: another_client.instance_variable_get(:@cookie), current_team_id: another_client.team_id)
     end
 
-    def initialize(cookie: nil, current_team_id: nil)
+    def initialize(cookie: nil, current_team_id: nil, proxy: nil)
       options = {
        request: {
           timeout:       (ENV["SPACESHIP_TIMEOUT"] || 300).to_i,
@@ -210,14 +210,19 @@ module Spaceship
         c.use(FaradayMiddleware::RelsMiddleware)
         c.adapter(Faraday.default_adapter)
 
-        if ENV['SPACESHIP_DEBUG']
-          # for debugging only
-          # This enables tracking of networking requests using Charles Web Proxy
-          c.proxy = "https://127.0.0.1:8888"
-          c.ssl[:verify_mode] = OpenSSL::SSL::VERIFY_NONE
-        elsif ENV["SPACESHIP_PROXY"]
-          c.proxy = ENV["SPACESHIP_PROXY"]
-          c.ssl[:verify_mode] = OpenSSL::SSL::VERIFY_NONE if ENV["SPACESHIP_PROXY_SSL_VERIFY_NONE"]
+        if proxy
+          c.proxy = proxy
+          c.ssl[:verify_mode] = nil
+        else
+          if ENV['SPACESHIP_DEBUG']
+            # for debugging only
+            # This enables tracking of networking requests using Charles Web Proxy
+            c.proxy = "https://127.0.0.1:8888"
+            c.ssl[:verify_mode] = OpenSSL::SSL::VERIFY_NONE
+          elsif ENV["SPACESHIP_PROXY"]
+            c.proxy = ENV["SPACESHIP_PROXY"]
+            c.ssl[:verify_mode] = OpenSSL::SSL::VERIFY_NONE if ENV["SPACESHIP_PROXY_SSL_VERIFY_NONE"]
+          end
         end
 
         if ENV["DEBUG"]
@@ -341,9 +346,9 @@ module Spaceship
     # @raise InvalidUserCredentialsError: raised if authentication failed
     #
     # @return (Spaceship::Client) The client the login method was called for
-    def self.login(user = nil, password = nil)
-      instance = self.new
-      if instance.login(user, password)
+    def self.login(user = nil, password = nil, proxy = nil)
+      instance = self.new(cookie: nil, current_team_id: nil, proxy: proxy)
+      if instance.login(user, password, proxy)
         instance
       else
         raise InvalidUserCredentialsError.new, "Invalid User Credentials"
@@ -363,7 +368,7 @@ module Spaceship
     # @raise InvalidUserCredentialsError: raised if authentication failed
     #
     # @return (Spaceship::Client) The client the login method was called for
-    def login(user = nil, password = nil)
+    def login(user = nil, password = nil, proxy = nil)
       if user.to_s.empty? || password.to_s.empty?
         require 'credentials_manager/account_manager'
 
@@ -380,8 +385,9 @@ module Spaceship
 
       self.user = user
       @password = password
+      @proxy = proxy
       begin
-        do_login(user, password) # calls `send_login_request` in sub class (which then will redirect back here to `send_shared_login_request`, below)
+        do_login(user, password, proxy) # calls `send_login_request` in sub class (which then will redirect back here to `send_shared_login_request`, below)
       rescue InvalidUserCredentialsError => ex
         raise ex unless keychain_entry
 
@@ -397,7 +403,7 @@ module Spaceship
     # This will also handle 2 step verification and 2 factor authentication
     #
     # It is called in `send_login_request` of sub classes (which the method `login`, above, transferred over to via `do_login`)
-    def send_shared_login_request(user, password)
+    def send_shared_login_request(user, password, proxy)
       # Check if we have a cached/valid session
       #
       # Background:
@@ -491,7 +497,7 @@ module Spaceship
         return response
       when 409
         # 2 step/factor is enabled for this account, first handle that
-        handle_two_step_or_factor(response)
+        handle_two_step_or_factor(response, proxy)
         # and then get the olympus session
         fetch_olympus_session
         return true
@@ -662,7 +668,7 @@ module Spaceship
           raise UnauthorizedAccessError.new, "Authentication error, you passed an invalid session using the environment variable FASTLANE_SESSION or SPACESHIP_SESSION"
         end
 
-        do_login(self.user, @password)
+        do_login(self.user, @password, nil)
         sleep(3) unless Object.const_defined?("SpecHelper")
         retry
       end
@@ -770,9 +776,9 @@ module Spaceship
       Dir.exist?(File.expand_path(path))
     end
 
-    def do_login(user, password)
+    def do_login(user, password, proxy)
       @loggedin = false
-      ret = send_login_request(user, password) # different in subclasses
+      ret = send_login_request(user, password, proxy) # different in subclasses
       @loggedin = true
       ret
     end

@@ -20,10 +20,10 @@ module Spaceship
 
     attr_reader :du_client
 
-    def initialize
-      super
+    def initialize(proxy: nil)
+      super(cookie: nil, current_team_id: nil, proxy: proxy)
 
-      @du_client = DUClient.new
+      @du_client = DUClient.new(cookie: nil, current_team_id: nil, proxy: proxy)
     end
 
     class << self

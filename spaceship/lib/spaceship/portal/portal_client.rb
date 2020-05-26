@@ -24,8 +24,8 @@ module Spaceship
       "https://developer.apple.com/services-account/#{PROTOCOL_VERSION}/"
     end
 
-    def send_login_request(user, password)
-      response = send_shared_login_request(user, password)
+    def send_login_request(user, password, proxy)
+      response = send_shared_login_request(user, password, proxy)
       return response if self.cookie.include?("myacinfo")
 
       # When the user has 2 step enabled, we might have to call this method again
@@ -35,7 +35,7 @@ module Spaceship
       # myacinfo cookie at that point. That means, after getting the DES... cookie
       # we have to send the login request again. This will then get us a valid myacinfo
       # cookie, additionally to the DES... cookie
-      return send_shared_login_request(user, password)
+      return send_shared_login_request(user, password, proxy)
     end
 
     # @return (Array) A list of all available teams

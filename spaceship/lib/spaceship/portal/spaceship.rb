@@ -21,8 +21,8 @@ module Spaceship
       # @raise InvalidUserCredentialsError: raised if authentication failed
       #
       # @return (Spaceship::Portal::Client) The client the login method was called for
-      def login(user = nil, password = nil)
-        @client = PortalClient.login(user, password)
+      def login(user = nil, password = nil, proxy = nil)
+        @client = PortalClient.login(user, password, proxy)
       end
 
       # Open up the team selection for the user (if necessary).
