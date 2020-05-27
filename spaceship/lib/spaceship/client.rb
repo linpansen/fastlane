@@ -194,6 +194,10 @@ module Spaceship
     end
 
     def initialize(cookie: nil, current_team_id: nil, proxy: nil)
+      puts("--------")
+      puts("client->initialize")
+      puts("proxy: #{proxy}")
+
       options = {
        request: {
           timeout:       (ENV["SPACESHIP_TIMEOUT"] || 300).to_i,
